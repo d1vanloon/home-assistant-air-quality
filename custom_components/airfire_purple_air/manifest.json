@@ -1,0 +1,14 @@
+{
+  "domain": "airfire_purple_air",
+  "name": "AirFire Purple Air",
+  "categories": ["sensors.air_quality"],
+  "codeowners": ["@d1vanloon"],
+  "config_flow": true,
+  "documentation": "https://github.com/d1vanloon/home-assistant-air-quality",
+  "integration_type": "device",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/d1vanloon/home-assistant-air-quality/issues",
+  "loggers": ["custom_components.airfire_purple_air"],
+  "requirements": [],
+  "version": "0.1.0"
+}
