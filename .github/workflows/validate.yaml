@@ -21,8 +21,6 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # Setting topics needs administration=write. This token does not have it.
-          ignore: topics
 
   validate-hassfest:
     name: Hassfest validation
