@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Enter the numeric PurpleAir sensor ID from the AirNow Fire and Smoke Map.",
+        "data": {
+          "sensor_id": "Sensor ID",
+          "name": "Name"
+        },
+        "data_description": {
+          "sensor_id": "Digits only. For example, 281078.",
+          "name": "Optional. Leave blank to use Purple Air and the sensor ID."
+        }
+      }
+    },
+    "error": {
+      "invalid_sensor_id": "Sensor ID must be digits.",
+      "sensor_not_found": "AirFire has no data for that sensor ID.",
+      "invalid_data": "AirFire returned data that could not be read.",
+      "cannot_connect": "Could not reach AirFire."
+    },
+    "abort": {
+      "already_configured": "This PurpleAir sensor is already configured."
+    }
+  }
+}
