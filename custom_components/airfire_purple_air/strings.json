@@ -2,6 +2,32 @@
   "config": {
     "step": {
       "user": {
+        "description": "Add a PurpleAir sensor near Home Assistant, or enter a sensor ID.",
+        "menu_options": {
+          "nearby": "Nearby",
+          "by_id": "Enter sensor ID"
+        }
+      },
+      "nearby": {
+        "description": "Search for PurpleAir sensors near a location. Distances are in miles.",
+        "data": {
+          "latitude": "Latitude",
+          "longitude": "Longitude",
+          "radius_miles": "Search radius"
+        },
+        "data_description": {
+          "latitude": "Starts at the Home Assistant location.",
+          "longitude": "Starts at the Home Assistant location.",
+          "radius_miles": "Sensors farther than this are hidden. The default is 5 miles, and the maximum is 25."
+        }
+      },
+      "pick": {
+        "description": "Choose a sensor. The label shows the sensor ID, the distance in miles, and the current PM2.5 when AirFire has one.",
+        "data": {
+          "sensor_id": "Sensor"
+        }
+      },
+      "by_id": {
         "description": "Enter the numeric PurpleAir sensor ID from the AirNow Fire and Smoke Map.",
         "data": {
           "sensor_id": "Sensor ID",
@@ -17,7 +43,8 @@
       "invalid_sensor_id": "Sensor ID must be digits.",
       "sensor_not_found": "AirFire has no data for that sensor ID.",
       "invalid_data": "AirFire returned data that could not be read.",
-      "cannot_connect": "Could not reach AirFire."
+      "cannot_connect": "Could not reach AirFire.",
+      "no_nearby_sensors": "No unconfigured sensors are within that radius. Widen the search or change the location."
     },
     "abort": {
       "already_configured": "This PurpleAir sensor is already configured."
