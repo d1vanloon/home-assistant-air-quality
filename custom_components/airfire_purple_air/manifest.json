@@ -1,6 +1,7 @@
 {
   "domain": "airfire_purple_air",
   "name": "AirFire Purple Air",
+  "categories": ["sensors.air_quality"],
   "codeowners": ["@d1vanloon"],
   "config_flow": true,
   "documentation": "https://github.com/d1vanloon/home-assistant-air-quality",

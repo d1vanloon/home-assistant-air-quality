@@ -21,9 +21,8 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-          # Topics and the detected license live on the GitHub repository, not in this branch.
-          # This token cannot set topics, and GitHub reads the license from the default branch.
-          ignore: topics license
+          # Setting topics needs administration=write. This token does not have it.
+          ignore: topics
 
   validate-hassfest:
     name: Hassfest validation
