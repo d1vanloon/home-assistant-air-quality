@@ -1,0 +1,6 @@
+sensor_index,latitude,longitude,utc_ts,epa_pm25,epa_nowcast,timezone,raw_pm25
+281078,44.89095,-123.06918,2026-10-28 21:00:00+0000,3.3,3.1,America/Los_Angeles,2.1
+281079,44.90500,-123.06918,2026-10-28 21:00:00+0000,,4.0,America/Los_Angeles,1.0
+999001,47.6062,-122.3321,2026-10-28 21:00:00+0000,8.0,8.0,America/Los_Angeles,9.0
+nope,44.89,-123.07,2026-10-28 21:00:00+0000,1.0,1.0,America/Los_Angeles,1.0
+281080,not-a-number,-123.07,2026-10-28 21:00:00+0000,1.0,1.0,America/Los_Angeles,1.0
