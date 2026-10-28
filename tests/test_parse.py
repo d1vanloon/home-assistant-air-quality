@@ -38,6 +38,21 @@ def test_parse_does_not_reuse_an_older_row_when_latest_has_no_measurement() -> N
         parse_latest_reading(text)
 
 
+def test_parse_rejects_a_latest_row_with_a_missing_timestamp() -> None:
+    text = "pm25,local_ts\n1.0,2026-10-28 00:00:00-0500\n9.0,\n"
+    with pytest.raises(InvalidReading):
+        parse_latest_reading(text)
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e999"])
+def test_parse_rejects_a_latest_row_with_only_non_finite_measurements(
+    value: str,
+) -> None:
+    text = f"pm25,local_ts\n{value},2026-10-28 00:10:00-0500\n"
+    with pytest.raises(InvalidReading):
+        parse_latest_reading(text)
+
+
 def test_parse_ignores_non_numeric_columns() -> None:
     text = "pm25,flag,local_ts\n4.0,ok,2026-10-28 00:05:06-0500\n"
     assert parse_latest_reading(text).factors == {"pm25": 4.0}

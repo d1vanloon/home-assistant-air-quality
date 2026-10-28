@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
@@ -42,16 +43,12 @@ def _latest_sample(text: str) -> tuple[str, dict[str, str | None]]:
     if not reader.fieldnames or TIMESTAMP_COLUMN not in reader.fieldnames:
         raise InvalidReading("CSV is missing local_ts")
 
-    raw_timestamp = ""
     latest: dict[str, str | None] | None = None
     for row in reader:
-        raw = row.get(TIMESTAMP_COLUMN)
-        if raw:
-            raw_timestamp = raw
-            latest = row
+        latest = row
     if latest is None:
         raise InvalidReading("CSV has no readings")
-    return raw_timestamp, latest
+    return latest.get(TIMESTAMP_COLUMN) or "", latest
 
 
 def _parse_timestamp(raw_timestamp: str) -> datetime:
@@ -70,9 +67,11 @@ def _numeric_factors(row: Mapping[str, str | None]) -> dict[str, float]:
         if not stripped:
             continue
         try:
-            factors[key] = float(stripped)
+            number = float(stripped)
         except ValueError:
             continue
+        if math.isfinite(number):
+            factors[key] = number
     return factors
 
 
