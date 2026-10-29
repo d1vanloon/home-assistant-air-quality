@@ -10,5 +10,5 @@
   "issue_tracker": "https://github.com/d1vanloon/home-assistant-air-quality/issues",
   "loggers": ["custom_components.airfire_purple_air"],
   "requirements": [],
-  "version": "0.2.0"
+  "version": "0.3.0"
 }
