@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
@@ -9,21 +11,21 @@ from homeassistant.const import UnitOfLength
 from homeassistant.helpers import aiohttp_client
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.selector import (
-    NumberSelector,
-    NumberSelectorConfig,
-    NumberSelectorMode,
+    LocationSelector,
+    LocationSelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
     SelectSelectorMode,
 )
+from homeassistant.util.unit_conversion import DistanceConverter
 
 from .client import CannotConnect, SensorNotFound, fetch_catalog, fetch_latest
 from .const import (
     CONF_LATITUDE,
+    CONF_LOCATION,
     CONF_LONGITUDE,
     CONF_NAME,
-    CONF_RADIUS_MILES,
     CONF_SENSOR_ID,
     DEFAULT_RADIUS_MILES,
     DOMAIN,
@@ -39,6 +41,9 @@ from .model import (
     nearby,
     nearby_label,
 )
+
+# The location selector calls this field "radius" and stores it in meters.
+_SELECTOR_RADIUS = "radius"
 
 BY_ID_SCHEMA = vol.Schema(
     {
@@ -56,6 +61,55 @@ def _error_key(err: AirFireError) -> str:
     if isinstance(err, CannotConnect):
         return "cannot_connect"
     raise TypeError(f"Unhandled AirFire error {type(err).__name__}")
+
+
+def _as_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _whole_meters(miles: float) -> float:
+    # The map UI rounds the radius to a whole meter.
+    return float(
+        round(
+            DistanceConverter.convert(miles, UnitOfLength.MILES, UnitOfLength.METERS)
+        )
+    )
+
+
+def _radius_miles(radius_meters: float) -> float | None:
+    if radius_meters <= 0:
+        return None
+    if radius_meters > _whole_meters(MAX_RADIUS_MILES):
+        return None
+    return DistanceConverter.convert(
+        radius_meters, UnitOfLength.METERS, UnitOfLength.MILES
+    )
+
+
+def _search_area(location: object) -> tuple[float, float, float] | str:
+    if not isinstance(location, Mapping):
+        return "invalid_location"
+    latitude = _as_float(location.get(CONF_LATITUDE))
+    longitude = _as_float(location.get(CONF_LONGITUDE))
+    if (
+        latitude is None
+        or longitude is None
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return "invalid_location"
+    radius_meters = _as_float(location.get(_SELECTOR_RADIUS))
+    if radius_meters is None:
+        return "radius_out_of_range"
+    radius_miles = _radius_miles(radius_meters)
+    if radius_miles is None:
+        return "radius_out_of_range"
+    return (latitude, longitude, radius_miles)
 
 
 class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -99,17 +153,14 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                catalog = await self._async_catalog()
-            except AirFireError as err:
-                errors["base"] = _error_key(err)
+            area = _search_area(user_input.get(CONF_LOCATION))
+            if isinstance(area, str):
+                errors[CONF_LOCATION] = area
             else:
-                matches = self._matches_for(user_input, catalog)
-                if not matches:
-                    errors["base"] = "no_nearby_sensors"
-                else:
-                    self._matches = tuple(matches)
+                error = await self._async_collect_matches(area)
+                if error is None:
                     return await self.async_step_pick()
+                errors["base"] = error
 
         schema = self._nearby_schema()
         if user_input is not None:
@@ -137,6 +188,25 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def _async_collect_matches(
+        self, area: tuple[float, float, float]
+    ) -> str | None:
+        latitude, longitude, radius_miles = area
+        try:
+            catalog = await self._async_catalog()
+        except AirFireError as err:
+            return _error_key(err)
+        configured = self._configured_sensor_ids()
+        matches = [
+            sensor
+            for sensor in nearby(catalog, latitude, longitude, radius_miles)
+            if sensor.sensor_index not in configured
+        ]
+        if not matches:
+            return "no_nearby_sensors"
+        self._matches = tuple(matches)
+        return None
+
     async def _async_catalog(self) -> tuple[CatalogSensor, ...]:
         if self._catalog is not None:
             return self._catalog
@@ -146,21 +216,6 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
         self._catalog = catalog
         return catalog
 
-    def _matches_for(
-        self, user_input: dict[str, Any], catalog: tuple[CatalogSensor, ...]
-    ) -> list[NearbySensor]:
-        configured = self._configured_sensor_ids()
-        return [
-            sensor
-            for sensor in nearby(
-                catalog,
-                float(user_input[CONF_LATITUDE]),
-                float(user_input[CONF_LONGITUDE]),
-                float(user_input[CONF_RADIUS_MILES]),
-            )
-            if sensor.sensor_index not in configured
-        ]
-
     def _configured_sensor_ids(self) -> set[str]:
         return {
             entry.unique_id
@@ -168,40 +223,19 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
             if entry.unique_id is not None
         }
 
+    def _default_location(self) -> dict[str, float]:
+        return {
+            CONF_LATITUDE: self.hass.config.latitude,
+            CONF_LONGITUDE: self.hass.config.longitude,
+            _SELECTOR_RADIUS: _whole_meters(DEFAULT_RADIUS_MILES),
+        }
+
     def _nearby_schema(self) -> vol.Schema:
         return vol.Schema(
             {
                 vol.Required(
-                    CONF_LATITUDE, default=self.hass.config.latitude
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=-90,
-                        max=90,
-                        step="any",
-                        mode=NumberSelectorMode.BOX,
-                    )
-                ),
-                vol.Required(
-                    CONF_LONGITUDE, default=self.hass.config.longitude
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=-180,
-                        max=180,
-                        step="any",
-                        mode=NumberSelectorMode.BOX,
-                    )
-                ),
-                vol.Required(
-                    CONF_RADIUS_MILES, default=DEFAULT_RADIUS_MILES
-                ): NumberSelector(
-                    NumberSelectorConfig(
-                        min=0.1,
-                        max=MAX_RADIUS_MILES,
-                        step=0.1,
-                        mode=NumberSelectorMode.BOX,
-                        unit_of_measurement=UnitOfLength.MILES,
-                    )
-                ),
+                    CONF_LOCATION, default=self._default_location()
+                ): LocationSelector(LocationSelectorConfig(radius=True)),
             }
         )
 

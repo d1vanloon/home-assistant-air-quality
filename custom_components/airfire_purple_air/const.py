@@ -8,9 +8,9 @@ from .model import SensorId
 DOMAIN = "airfire_purple_air"
 CONF_SENSOR_ID = "sensor_id"
 CONF_NAME = "name"
+CONF_LOCATION = "location"
 CONF_LATITUDE = "latitude"
 CONF_LONGITUDE = "longitude"
-CONF_RADIUS_MILES = "radius_miles"
 DEFAULT_RADIUS_MILES = 5
 # A wider search returns hundreds of sensors in a dense city.
 MAX_RADIUS_MILES = 25

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
+from aiohttp import ClientError
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from yarl import URL
 
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
@@ -11,8 +17,27 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.airfire_purple_air.const import CONF_SENSOR_ID, DOMAIN, data_url
-from custom_components.airfire_purple_air.model import SensorId
+from custom_components.airfire_purple_air.client import CannotConnect
+from custom_components.airfire_purple_air.const import (
+    CONF_SENSOR_ID,
+    DOMAIN,
+    PAS_CATALOG_URL,
+    data_url,
+)
+from custom_components.airfire_purple_air.coordinator import async_cached_catalog
+from custom_components.airfire_purple_air.model import SensorId, parse_catalog
+
+_CATALOG = Path(__file__).parent / "fixtures" / "pas_snippet.csv"
+
+
+@pytest.fixture(autouse=True)
+def _catalog(aioclient_mock) -> None:
+    aioclient_mock.get(PAS_CATALOG_URL, text=_CATALOG.read_text(encoding="utf-8"))
+
+
+def _catalog_gets(aioclient_mock) -> int:
+    catalog = URL(PAS_CATALOG_URL)
+    return sum(1 for call in aioclient_mock.mock_calls if call[1] == catalog)
 
 
 def _entry(sensor_id: str, title: str | None = None) -> MockConfigEntry:
@@ -125,3 +150,202 @@ async def test_new_csv_column_adds_a_sensor(
     assert pm10 is not None
     assert pm10.state == "8.0"
     assert hass.states.get(_entity_id(hass, "281078_pm25")).state == "2.5"
+
+
+async def test_factor_entities_expose_catalog_coordinates(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    reading = "pm25,voc,local_ts\n3.3,1.5,2026-10-28 00:05:06-0500\n"
+    entries = []
+    for sensor_id in ("281078", "281079"):
+        aioclient_mock.get(data_url(SensorId(sensor_id)), text=reading)
+        entry = _entry(sensor_id)
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        entries.append(entry)
+    await hass.async_block_till_done()
+
+    for unique_id in ("281078_pm25", "281078_voc"):
+        state = hass.states.get(_entity_id(hass, unique_id))
+        assert state is not None
+        assert state.attributes["latitude"] == 44.89095
+        assert state.attributes["longitude"] == -123.06918
+        assert state.attributes["sampled_at"] == "2026-10-28T00:05:06-05:00"
+    other = hass.states.get(_entity_id(hass, "281079_pm25"))
+    assert other is not None
+    assert other.attributes["latitude"] == 44.905
+    assert other.attributes["longitude"] == -123.06918
+    assert entries[0].data == {CONF_SENSOR_ID: "281078"}
+    assert entries[1].data == {CONF_SENSOR_ID: "281079"}
+    assert _catalog_gets(aioclient_mock) == 1
+
+    await entries[0].runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    assert _catalog_gets(aioclient_mock) == 1
+
+
+async def test_sensor_missing_from_the_catalog_has_no_coordinates(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(
+        PAS_CATALOG_URL,
+        text="sensor_index,latitude,longitude\n1,0,0\n",
+    )
+    aioclient_mock.get(
+        data_url(SensorId("281078")),
+        text="pm25,local_ts\n3.3,2026-10-28 00:05:06-0500\n",
+    )
+    entry = _entry("281078")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "281078_pm25"))
+    assert state is not None
+    assert state.state == "3.3"
+    assert "latitude" not in state.attributes
+    assert "longitude" not in state.attributes
+    assert state.attributes["sampled_at"] == "2026-10-28T00:05:06-05:00"
+    assert entry.data == {CONF_SENSOR_ID: "281078"}
+
+
+async def test_coordinates_appear_when_the_catalog_recovers(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    url = data_url(SensorId("281078"))
+    reading = "pm25,local_ts\n3.3,2026-10-28 00:05:06-0500\n"
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(PAS_CATALOG_URL, exc=ClientError())
+    aioclient_mock.get(url, text=reading)
+    entry = _entry("281078")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "281078_pm25"))
+    assert state is not None
+    assert state.state == "3.3"
+    assert "latitude" not in state.attributes
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(PAS_CATALOG_URL, text=_CATALOG.read_text(encoding="utf-8"))
+    aioclient_mock.get(url, text=reading)
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "281078_pm25"))
+    assert state is not None
+    assert state.attributes["latitude"] == 44.89095
+    assert state.attributes["longitude"] == -123.06918
+    assert _catalog_gets(aioclient_mock) == 1
+
+
+async def test_concurrent_catalog_failures_share_one_request(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    async def fail_together(_session):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        raise CannotConnect("down")
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        fail_together,
+    )
+    first = asyncio.create_task(async_cached_catalog(hass))
+    await asyncio.sleep(0)
+    second = asyncio.create_task(async_cached_catalog(hass))
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert calls == 1
+    assert all(isinstance(result, CannotConnect) for result in results)
+
+    async def succeed(_session):
+        nonlocal calls
+        calls += 1
+        return parse_catalog(_CATALOG.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        succeed,
+    )
+    catalog = await async_cached_catalog(hass)
+
+    assert calls == 2
+    assert catalog[0].sensor_index == "281078"
+    assert catalog[0].latitude == 44.89095
+
+
+async def test_cancelling_one_catalog_waiter_leaves_the_download_running(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait_then_catalog(_session):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return parse_catalog(_CATALOG.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        wait_then_catalog,
+    )
+    first = asyncio.create_task(async_cached_catalog(hass))
+    await started.wait()
+    second = asyncio.create_task(async_cached_catalog(hass))
+    await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    release.set()
+    catalog = await second
+
+    assert calls == 1
+    assert catalog[0].sensor_index == "281078"
+    assert catalog[0].latitude == 44.89095
+    assert (await async_cached_catalog(hass))[0].sensor_index == "281078"
+    assert calls == 1
+
+
+async def test_a_finished_catalog_is_kept_after_its_waiter_is_cancelled(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def wait_then_catalog(_session):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        sensors = parse_catalog(_CATALOG.read_text(encoding="utf-8"))
+        finished.set()
+        return sensors
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        wait_then_catalog,
+    )
+    waiter = asyncio.create_task(async_cached_catalog(hass))
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await finished.wait()
+    await asyncio.sleep(0)
+    catalog = await async_cached_catalog(hass)
+
+    assert calls == 1
+    assert catalog[0].sensor_index == "281078"
+    assert catalog[0].latitude == 44.89095

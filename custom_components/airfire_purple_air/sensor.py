@@ -8,7 +8,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfDensity
+from homeassistant.const import EntityStateAttribute, UnitOfDensity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -56,8 +56,16 @@ class AirFireFactorSensor(AirFireEntity, SensorEntity):
         return self.coordinator.data.factors.get(self.entity_description.key)
 
     @property
-    def extra_state_attributes(self) -> Mapping[str, str]:
-        return {"sampled_at": self.coordinator.data.timestamp.isoformat()}
+    def extra_state_attributes(self) -> Mapping[str, str | float]:
+        attributes: dict[str, str | float] = {
+            "sampled_at": self.coordinator.data.timestamp.isoformat(),
+        }
+        latitude = self.coordinator.latitude
+        longitude = self.coordinator.longitude
+        if latitude is not None and longitude is not None:
+            attributes[EntityStateAttribute.LATITUDE] = latitude
+            attributes[EntityStateAttribute.LONGITUDE] = longitude
+        return attributes
 
 
 async def async_setup_entry(

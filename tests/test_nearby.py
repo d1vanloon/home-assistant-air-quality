@@ -8,6 +8,7 @@ from custom_components.airfire_purple_air.model import (
     CatalogSensor,
     InvalidCatalog,
     SensorId,
+    coordinates_for,
     nearby,
     nearby_label,
     parse_catalog,
@@ -122,3 +123,11 @@ def test_nearby_label_shows_a_zero_pm_reading() -> None:
 
 def test_nearby_of_an_empty_catalog_is_empty() -> None:
     assert nearby((), 44.0, -123.0, 5) == []
+
+
+def test_coordinates_for_reads_the_catalog_row() -> None:
+    sensors = parse_catalog(_FIXTURE.read_text(encoding="utf-8"))
+
+    assert coordinates_for(sensors, "281078") == (44.89095, -123.06918)
+    assert coordinates_for(sensors, "281079") == (44.905, -123.06918)
+    assert coordinates_for(sensors, "42") is None
