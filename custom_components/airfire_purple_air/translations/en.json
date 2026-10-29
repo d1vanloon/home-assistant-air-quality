@@ -2,23 +2,19 @@
   "config": {
     "step": {
       "user": {
-        "description": "Add a PurpleAir sensor near Home Assistant, or enter a sensor ID.",
+        "description": "Add a PurpleAir sensor near a place on the map, or enter a sensor ID.",
         "menu_options": {
           "nearby": "Nearby",
           "by_id": "Enter sensor ID"
         }
       },
       "nearby": {
-        "description": "Search for PurpleAir sensors near a location. Distances are in miles.",
+        "description": "Move the marker and the circle to choose where to search. The circle starts at the Home Assistant location and 5 miles. The radius number is in meters: 5 miles is 8,047 meters, and the widest search is 25 miles (40,234 meters). The sensor list stays in miles.",
         "data": {
-          "latitude": "Latitude",
-          "longitude": "Longitude",
-          "radius_miles": "Search radius"
+          "location": "Search area"
         },
         "data_description": {
-          "latitude": "Starts at the Home Assistant location.",
-          "longitude": "Starts at the Home Assistant location.",
-          "radius_miles": "Sensors farther than this are hidden. The default is 5 miles, and the maximum is 25."
+          "location": "Drag the marker to move the center. Drag the circle, or edit the meters, to change the radius."
         }
       },
       "pick": {
@@ -44,7 +40,9 @@
       "sensor_not_found": "AirFire has no data for that sensor ID.",
       "invalid_data": "AirFire returned data that could not be read.",
       "cannot_connect": "Could not reach AirFire.",
-      "no_nearby_sensors": "No unconfigured sensors are within that radius. Widen the search or change the location."
+      "invalid_location": "Enter a latitude from -90 to 90 and a longitude from -180 to 180.",
+      "radius_out_of_range": "Enter a radius greater than 0 and at most 25 miles (40,234 meters).",
+      "no_nearby_sensors": "No unconfigured sensors are inside that circle. Widen the circle or move the marker."
     },
     "abort": {
       "already_configured": "This PurpleAir sensor is already configured."

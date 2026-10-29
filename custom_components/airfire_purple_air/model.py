@@ -215,3 +215,12 @@ def nearby_label(sensor: NearbySensor) -> str:
     if sensor.pm25 is None:
         return label
     return f"{label} · PM2.5 {sensor.pm25:.1f}"
+
+
+def coordinates_for(
+    sensors: Sequence[CatalogSensor], sensor_id: str
+) -> tuple[float, float] | None:
+    for sensor in sensors:
+        if sensor.sensor_index == sensor_id:
+            return (sensor.latitude, sensor.longitude)
+    return None

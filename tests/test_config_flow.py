@@ -6,14 +6,17 @@ from aiohttp import ClientError
 from yarl import URL
 
 from homeassistant import config_entries
+from homeassistant.const import UnitOfLength
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.selector import LocationSelector
+from homeassistant.util.unit_conversion import DistanceConverter
 
 from custom_components.airfire_purple_air.const import (
     CONF_LATITUDE,
+    CONF_LOCATION,
     CONF_LONGITUDE,
     CONF_NAME,
-    CONF_RADIUS_MILES,
     CONF_SENSOR_ID,
     DOMAIN,
     PAS_CATALOG_URL,
@@ -22,6 +25,7 @@ from custom_components.airfire_purple_air.const import (
 from custom_components.airfire_purple_air.model import SensorId
 
 _CATALOG = Path(__file__).parent / "fixtures" / "pas_snippet.csv"
+_EMPTY_CATALOG = "sensor_index,latitude,longitude\n"
 _HOME_LATITUDE = 44.89095
 _HOME_LONGITUDE = -123.06918
 
@@ -59,6 +63,33 @@ def _default(schema, name: str):
     raise AssertionError(name)
 
 
+def _radius_meters(miles: float) -> float:
+    return float(
+        round(
+            DistanceConverter.convert(miles, UnitOfLength.MILES, UnitOfLength.METERS)
+        )
+    )
+
+
+def _area(latitude: float, longitude: float, miles: float = 5) -> dict[str, float]:
+    return {
+        CONF_LATITUDE: latitude,
+        CONF_LONGITUDE: longitude,
+        "radius": _radius_meters(miles),
+    }
+
+
+def _selector(schema, name: str):
+    for key, validator in schema.schema.items():
+        if getattr(key, "schema", None) == name:
+            return validator
+    raise AssertionError(list(schema.schema))
+
+
+def _mock_empty_catalog(aioclient_mock) -> None:
+    aioclient_mock.get(PAS_CATALOG_URL, text=_EMPTY_CATALOG)
+
+
 def _sensor_options(schema) -> list[dict[str, str]]:
     for key, validator in schema.schema.items():
         if getattr(key, "schema", None) == CONF_SENSOR_ID:
@@ -74,6 +105,7 @@ def _catalog_gets(aioclient_mock) -> int:
 async def test_user_flow_creates_entry(
     hass: HomeAssistant, aioclient_mock, sensor_csv: str
 ) -> None:
+    _mock_empty_catalog(aioclient_mock)
     aioclient_mock.get(data_url(SensorId("281078")), text=sensor_csv)
 
     result = await _configure(
@@ -89,6 +121,7 @@ async def test_user_flow_creates_entry(
 async def test_user_flow_defaults_the_title(
     hass: HomeAssistant, aioclient_mock, sensor_csv: str
 ) -> None:
+    _mock_empty_catalog(aioclient_mock)
     aioclient_mock.get(data_url(SensorId("281078")), text=sensor_csv)
 
     result = await _configure(hass, **{CONF_SENSOR_ID: " 281078 "})
@@ -101,6 +134,7 @@ async def test_user_flow_defaults_the_title(
 async def test_second_sensor_creates_a_second_entry(
     hass: HomeAssistant, aioclient_mock, sensor_csv: str
 ) -> None:
+    _mock_empty_catalog(aioclient_mock)
     for sensor_id in ("281078", "281079"):
         aioclient_mock.get(data_url(SensorId(sensor_id)), text=sensor_csv)
         result = await _configure(hass, **{CONF_SENSOR_ID: sensor_id})
@@ -113,6 +147,7 @@ async def test_second_sensor_creates_a_second_entry(
 async def test_duplicate_sensor_aborts(
     hass: HomeAssistant, aioclient_mock, sensor_csv: str
 ) -> None:
+    _mock_empty_catalog(aioclient_mock)
     aioclient_mock.get(data_url(SensorId("281078")), text=sensor_csv)
     created = await _configure(hass, **{CONF_SENSOR_ID: "281078"})
     assert created["type"] is FlowResultType.CREATE_ENTRY
@@ -186,17 +221,17 @@ async def test_nearby_flow_creates_entry(
     form = await _choose(hass, menu["flow_id"], "nearby")
     assert form["type"] is FlowResultType.FORM
     assert form["step_id"] == "nearby"
-    assert _default(form["data_schema"], CONF_LATITUDE) == _HOME_LATITUDE
-    assert _default(form["data_schema"], CONF_LONGITUDE) == _HOME_LONGITUDE
-    assert _default(form["data_schema"], CONF_RADIUS_MILES) == 5
+    selector = _selector(form["data_schema"], CONF_LOCATION)
+    assert isinstance(selector, LocationSelector)
+    assert selector.config["radius"] is True
+    default = _default(form["data_schema"], CONF_LOCATION)
+    assert default[CONF_LATITUDE] == _HOME_LATITUDE
+    assert default[CONF_LONGITUDE] == _HOME_LONGITUDE
+    assert default["radius"] == _radius_meters(5)
 
     pick = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
     assert pick["type"] is FlowResultType.FORM
     assert pick["step_id"] == "pick"
@@ -228,11 +263,7 @@ async def test_nearby_omits_a_configured_sensor(
     form = await _choose(hass, menu["flow_id"], "nearby")
     pick = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
 
     assert _sensor_options(pick["data_schema"]) == [
@@ -249,7 +280,7 @@ async def test_nearby_empty_result_can_widen_without_a_second_download(
 
     empty = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {CONF_LATITUDE: 0, CONF_LONGITUDE: 0, CONF_RADIUS_MILES: 5},
+        {CONF_LOCATION: _area(0, 0)},
     )
     assert empty["type"] is FlowResultType.FORM
     assert empty["step_id"] == "nearby"
@@ -257,11 +288,7 @@ async def test_nearby_empty_result_can_widen_without_a_second_download(
 
     pick = await hass.config_entries.flow.async_configure(
         empty["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
 
     assert pick["step_id"] == "pick"
@@ -278,11 +305,7 @@ async def test_nearby_connection_error_stays_on_the_form(
 
     result = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -300,11 +323,7 @@ async def test_nearby_bad_catalog_stays_on_the_form(
 
     result = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
 
     assert result["type"] is FlowResultType.FORM
@@ -321,11 +340,7 @@ async def test_nearby_missing_sensor_file_stays_on_the_pick_form(
     form = await _choose(hass, menu["flow_id"], "nearby")
     pick = await hass.config_entries.flow.async_configure(
         form["flow_id"],
-        {
-            CONF_LATITUDE: _HOME_LATITUDE,
-            CONF_LONGITUDE: _HOME_LONGITUDE,
-            CONF_RADIUS_MILES: 5,
-        },
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE)},
     )
 
     result = await hass.config_entries.flow.async_configure(
@@ -335,4 +350,103 @@ async def test_nearby_missing_sensor_file_stays_on_the_pick_form(
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "pick"
     assert result["errors"]["base"] == "sensor_not_found"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+async def test_nearby_uses_a_center_other_than_home(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    aioclient_mock.get(PAS_CATALOG_URL, text=_CATALOG.read_text(encoding="utf-8"))
+    menu = await _start(hass)
+    form = await _choose(hass, menu["flow_id"], "nearby")
+
+    pick = await hass.config_entries.flow.async_configure(
+        form["flow_id"],
+        {CONF_LOCATION: _area(47.6062, -122.3321)},
+    )
+
+    assert pick["step_id"] == "pick"
+    assert _sensor_options(pick["data_schema"]) == [
+        {"value": "999001", "label": "999001 · 0.0 mi · PM2.5 8.0"}
+    ]
+
+
+async def test_nearby_accepts_the_25_mile_circle_and_rejects_one_more_meter(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    menu = await _start(hass)
+    form = await _choose(hass, menu["flow_id"], "nearby")
+
+    too_wide = await hass.config_entries.flow.async_configure(
+        form["flow_id"],
+        {
+            CONF_LOCATION: {
+                CONF_LATITUDE: _HOME_LATITUDE,
+                CONF_LONGITUDE: _HOME_LONGITUDE,
+                "radius": _radius_meters(25) + 1,
+            }
+        },
+    )
+
+    assert too_wide["type"] is FlowResultType.FORM
+    assert too_wide["step_id"] == "nearby"
+    assert too_wide["errors"]["location"] == "radius_out_of_range"
+    assert _catalog_gets(aioclient_mock) == 0
+
+    aioclient_mock.get(PAS_CATALOG_URL, text=_CATALOG.read_text(encoding="utf-8"))
+    pick = await hass.config_entries.flow.async_configure(
+        too_wide["flow_id"],
+        {CONF_LOCATION: _area(_HOME_LATITUDE, _HOME_LONGITUDE, 25)},
+    )
+
+    assert pick["step_id"] == "pick"
+    assert [option["value"] for option in _sensor_options(pick["data_schema"])] == [
+        "281078",
+        "281079",
+    ]
+
+
+async def test_nearby_rejects_a_missing_or_zero_radius(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    menu = await _start(hass)
+    form = await _choose(hass, menu["flow_id"], "nearby")
+
+    missing = await hass.config_entries.flow.async_configure(
+        form["flow_id"],
+        {
+            CONF_LOCATION: {
+                CONF_LATITUDE: _HOME_LATITUDE,
+                CONF_LONGITUDE: _HOME_LONGITUDE,
+            }
+        },
+    )
+
+    assert missing["errors"]["location"] == "radius_out_of_range"
+    assert _catalog_gets(aioclient_mock) == 0
+
+    zero = await hass.config_entries.flow.async_configure(
+        missing["flow_id"],
+        {CONF_LOCATION: {**_area(_HOME_LATITUDE, _HOME_LONGITUDE), "radius": 0}},
+    )
+
+    assert zero["step_id"] == "nearby"
+    assert zero["errors"]["location"] == "radius_out_of_range"
+    assert hass.config_entries.async_entries(DOMAIN) == []
+
+
+async def test_nearby_rejects_a_coordinate_outside_the_map(
+    hass: HomeAssistant, aioclient_mock
+) -> None:
+    menu = await _start(hass)
+    form = await _choose(hass, menu["flow_id"], "nearby")
+
+    result = await hass.config_entries.flow.async_configure(
+        form["flow_id"],
+        {CONF_LOCATION: {**_area(0, 0), CONF_LATITUDE: 120}},
+    )
+
+    assert result["step_id"] == "nearby"
+    assert result["errors"]["location"] == "invalid_location"
+    assert _catalog_gets(aioclient_mock) == 0
     assert hass.config_entries.async_entries(DOMAIN) == []
