@@ -25,6 +25,7 @@ type AirFireConfigEntry = ConfigEntry[AirFireCoordinator]
 class _CatalogCache:
     lock: asyncio.Lock
     sensors: tuple[CatalogSensor, ...] | None = None
+    inflight: asyncio.Task[tuple[CatalogSensor, ...]] | None = None
 
 
 def _catalog_cache(hass: HomeAssistant) -> _CatalogCache:
@@ -37,10 +38,30 @@ def _catalog_cache(hass: HomeAssistant) -> _CatalogCache:
 
 
 async def async_cached_catalog(hass: HomeAssistant) -> tuple[CatalogSensor, ...]:
+    # One download per run. Waiters share that attempt, including a failure.
+    # The failure is not stored, so a later poll can try again.
     cache = _catalog_cache(hass)
     async with cache.lock:
+        if cache.sensors is not None:
+            return cache.sensors
+        inflight = cache.inflight
+        if inflight is None or inflight.done():
+            inflight = asyncio.create_task(
+                fetch_catalog(async_get_clientsession(hass))
+            )
+            cache.inflight = inflight
+    try:
+        sensors = await inflight
+    except AirFireError:
+        async with cache.lock:
+            if cache.inflight is inflight:
+                cache.inflight = None
+        raise
+    async with cache.lock:
         if cache.sensors is None:
-            cache.sensors = await fetch_catalog(async_get_clientsession(hass))
+            cache.sensors = sensors
+        if cache.inflight is inflight:
+            cache.inflight = None
         return cache.sensors
 
 

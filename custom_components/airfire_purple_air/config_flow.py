@@ -20,7 +20,7 @@ from homeassistant.helpers.selector import (
 )
 from homeassistant.util.unit_conversion import DistanceConverter
 
-from .client import CannotConnect, SensorNotFound, fetch_latest
+from .client import CannotConnect, SensorNotFound, fetch_catalog, fetch_latest
 from .const import (
     CONF_LATITUDE,
     CONF_LOCATION,
@@ -31,9 +31,9 @@ from .const import (
     DOMAIN,
     MAX_RADIUS_MILES,
 )
-from .coordinator import async_cached_catalog
 from .model import (
     AirFireError,
+    CatalogSensor,
     InvalidCatalog,
     InvalidReading,
     NearbySensor,
@@ -116,6 +116,7 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        self._catalog: tuple[CatalogSensor, ...] | None = None
         self._matches: tuple[NearbySensor, ...] = ()
 
     async def async_step_user(
@@ -192,7 +193,7 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> str | None:
         latitude, longitude, radius_miles = area
         try:
-            catalog = await async_cached_catalog(self.hass)
+            catalog = await self._async_catalog()
         except AirFireError as err:
             return _error_key(err)
         configured = self._configured_sensor_ids()
@@ -205,6 +206,15 @@ class AirFirePurpleAirConfigFlow(ConfigFlow, domain=DOMAIN):
             return "no_nearby_sensors"
         self._matches = tuple(matches)
         return None
+
+    async def _async_catalog(self) -> tuple[CatalogSensor, ...]:
+        if self._catalog is not None:
+            return self._catalog
+        catalog = await fetch_catalog(
+            aiohttp_client.async_get_clientsession(self.hass)
+        )
+        self._catalog = catalog
+        return catalog
 
     def _configured_sensor_ids(self) -> set[str]:
         return {

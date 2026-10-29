@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from aiohttp import ClientError
@@ -16,13 +17,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
+from custom_components.airfire_purple_air.client import CannotConnect
 from custom_components.airfire_purple_air.const import (
     CONF_SENSOR_ID,
     DOMAIN,
     PAS_CATALOG_URL,
     data_url,
 )
-from custom_components.airfire_purple_air.model import SensorId
+from custom_components.airfire_purple_air.model import parse_catalog, SensorId
 
 _CATALOG = Path(__file__).parent / "fixtures" / "pas_snippet.csv"
 
@@ -236,3 +238,57 @@ async def test_coordinates_appear_when_the_catalog_recovers(
     assert state.attributes["latitude"] == 44.89095
     assert state.attributes["longitude"] == -123.06918
     assert _catalog_gets(aioclient_mock) == 1
+
+
+async def test_concurrent_catalog_failures_share_one_request(
+    hass: HomeAssistant, aioclient_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+
+    async def fail_together(_session):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)
+        raise CannotConnect("down")
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        fail_together,
+    )
+    reading = "pm25,local_ts\n3.3,2026-10-28 00:05:06-0500\n"
+    entries = []
+    for sensor_id in ("281078", "281079"):
+        aioclient_mock.get(data_url(SensorId(sensor_id)), text=reading)
+        entry = _entry(sensor_id)
+        entry.add_to_hass(hass)
+        entries.append(entry)
+
+    started = await asyncio.gather(
+        *(hass.config_entries.async_setup(entry.entry_id) for entry in entries)
+    )
+    await hass.async_block_till_done()
+
+    assert started == [True, True]
+    assert calls == 1
+    for sensor_id in ("281078", "281079"):
+        state = hass.states.get(_entity_id(hass, f"{sensor_id}_pm25"))
+        assert state is not None
+        assert state.state == "3.3"
+        assert "latitude" not in state.attributes
+
+    async def succeed(_session):
+        nonlocal calls
+        calls += 1
+        return parse_catalog(_CATALOG.read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        succeed,
+    )
+    await entries[0].runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+    recovered = hass.states.get(_entity_id(hass, "281078_pm25"))
+    assert recovered is not None
+    assert recovered.attributes["latitude"] == 44.89095
+    assert calls == 2

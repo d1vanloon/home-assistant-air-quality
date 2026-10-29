@@ -239,6 +239,7 @@ async def test_nearby_flow_creates_entry(
         {"value": "281078", "label": "281078 · 0.0 mi · PM2.5 3.3"},
         {"value": "281079", "label": "281079 · 1.0 mi"},
     ]
+    assert _catalog_gets(aioclient_mock) == 1
 
     result = await hass.config_entries.flow.async_configure(
         pick["flow_id"], {CONF_SENSOR_ID: "281078"}
@@ -248,7 +249,8 @@ async def test_nearby_flow_creates_entry(
     assert result["title"] == "Purple Air 281078"
     assert result["data"] == {CONF_SENSOR_ID: "281078"}
     assert result["result"].unique_id == "281078"
-    assert _catalog_gets(aioclient_mock) == 1
+    # Discovery keeps its own catalog. Setup reads it again for map coordinates.
+    assert _catalog_gets(aioclient_mock) == 2
 
 
 async def test_nearby_omits_a_configured_sensor(
