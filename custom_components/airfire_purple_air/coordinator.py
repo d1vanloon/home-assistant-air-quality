@@ -43,6 +43,15 @@ async def async_cached_catalog(hass: HomeAssistant) -> tuple[CatalogSensor, ...]
         if cache.sensors is not None:
             return cache.sensors
         download = cache.shared_download
+        if (
+            download is not None
+            and download.done()
+            and not download.cancelled()
+            and download.exception() is None
+        ):
+            cache.sensors = download.result()
+            cache.shared_download = None
+            return cache.sensors
         if download is None or download.done():
             download = asyncio.create_task(
                 fetch_catalog(async_get_clientsession(hass))

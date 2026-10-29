@@ -313,3 +313,39 @@ async def test_cancelling_one_catalog_waiter_leaves_the_download_running(
     assert catalog[0].latitude == 44.89095
     assert (await async_cached_catalog(hass))[0].sensor_index == "281078"
     assert calls == 1
+
+
+async def test_a_finished_catalog_is_kept_after_its_waiter_is_cancelled(
+    hass: HomeAssistant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def wait_then_catalog(_session):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        sensors = parse_catalog(_CATALOG.read_text(encoding="utf-8"))
+        finished.set()
+        return sensors
+
+    monkeypatch.setattr(
+        "custom_components.airfire_purple_air.coordinator.fetch_catalog",
+        wait_then_catalog,
+    )
+    waiter = asyncio.create_task(async_cached_catalog(hass))
+    await started.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await finished.wait()
+    await asyncio.sleep(0)
+    catalog = await async_cached_catalog(hass)
+
+    assert calls == 1
+    assert catalog[0].sensor_index == "281078"
+    assert catalog[0].latitude == 44.89095
